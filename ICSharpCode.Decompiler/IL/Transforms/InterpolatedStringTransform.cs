@@ -18,6 +18,7 @@
 
 using System;
 using System.Diagnostics;
+using System.Linq;
 
 using ICSharpCode.Decompiler.TypeSystem;
 
@@ -31,14 +32,17 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				return;
 			int interpolationStart = pos;
 			int interpolationEnd;
+			bool isCustomInterpolator = false;
+			int argIndex = -1;
+
 			ILInstruction insertionPoint;
 			// stloc v(newobj DefaultInterpolatedStringHandler..ctor(ldc.i4 literalLength, ldc.i4 formattedCount))
 			if (block.Instructions[pos] is StLoc {
 				Variable: ILVariable { Kind: VariableKind.Local } v,
-				Value: NewObj { Arguments: { Count: 2 } } newObj
+				Value: NewObj { Arguments: { Count: >= 2 } } newObj
 			} stloc
-				&& v.Type.IsKnownType(KnownTypeCode.DefaultInterpolatedStringHandler)
-				&& newObj.Method.DeclaringType.IsKnownType(KnownTypeCode.DefaultInterpolatedStringHandler)
+				&& v.Type.IsStringInterpolator()
+				&& newObj.Method.DeclaringType.IsStringInterpolator()
 				&& newObj.Arguments[0].MatchLdcI4(out _)
 				&& newObj.Arguments[1].MatchLdcI4(out _))
 			{
@@ -50,10 +54,18 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				while (IsKnownCall(block, pos, v));
 				interpolationEnd = pos;
 				// ... call ToStringAndClear(ldloca v) ...
-				if (!FindToStringAndClear(block, pos, interpolationStart, interpolationEnd, v, out insertionPoint))
+
+				isCustomInterpolator = v.Type.IsCustomStringInterpolator();
+				if (!FindToStringAndClear(block, pos, interpolationStart, interpolationEnd, v, out insertionPoint, out argIndex))
 				{
+					if (!isCustomInterpolator)
+					{
+						throw new Exception($"Can't find call passing IL2CPP Interpolated string handler");
+					}
+
 					return;
 				}
+				
 				if (!(v.StoreCount == 1 && v.AddressCount == interpolationEnd - interpolationStart && v.LoadCount == 0))
 				{
 					return;
@@ -70,10 +82,74 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			{
 				replacement.Instructions.Add(block.Instructions[i]);
 			}
-			var callToStringAndClear = insertionPoint;
-			insertionPoint.ReplaceWith(replacement);
-			replacement.FinalInstruction = callToStringAndClear;
-			block.Instructions.RemoveRange(interpolationStart, interpolationEnd - interpolationStart);
+
+			if (!isCustomInterpolator)
+			{
+				var callToStringAndClear = insertionPoint;
+				insertionPoint.ReplaceWith(replacement);
+				replacement.FinalInstruction = callToStringAndClear;
+				block.Instructions.RemoveRange(interpolationStart, interpolationEnd - interpolationStart);
+			}
+			else
+			{
+				
+				CallInstruction originalCall = (CallInstruction)(insertionPoint);
+
+				CallInstruction newCall = null;
+
+				bool IsMethodAppropriate(IMethod m)
+				{
+					if (m.IsStatic == originalCall.Method.IsStatic && m.Parameters.Count == originalCall.Method.Parameters.Count &&
+						m.Name.Equals(originalCall.Method.Name, StringComparison.Ordinal))
+					{
+						if (m.Parameters[argIndex].Type.IsKnownType(KnownTypeCode.String))
+							return true;
+					}
+
+					return false;
+				}
+
+				var replacementMethod = originalCall.Method.DeclaringType.GetMethods(IsMethodAppropriate, GetMemberOptions.IgnoreInheritedMembers).FirstOrDefault();
+				if(replacementMethod == null)
+				{
+					replacementMethod = originalCall.Method.DeclaringType.GetMethods(IsMethodAppropriate, GetMemberOptions.None).First();
+				}
+
+				if(originalCall is CallVirt virt)
+				{
+					newCall = new CallVirt(replacementMethod);
+				}
+				else if(originalCall is Call c)
+				{
+					newCall = new Call(replacementMethod);
+				}
+				else
+				{
+					throw new NotImplementedException("This call type is not implemented for custom string interpolator");
+				}
+
+				foreach (var a in originalCall.Arguments)
+					newCall.Arguments.Add(a);
+
+				// account for this arg
+				newCall.Arguments[argIndex + (newCall.Method.IsStatic ? 0 : 1)] = replacement;
+
+				insertionPoint.ReplaceWith(newCall);
+				replacement.FinalInstruction = new Nop();
+
+				// Remove all the Append* instructions.
+				block.Instructions.RemoveRange(interpolationStart, interpolationEnd - interpolationStart);
+				
+				// Insert interpolated string block
+				//block.Instructions.Insert(interpolationStart, newCall);
+
+				// Replace last instruction in the block with new interpolated string block.
+				//insertionPoint.ReplaceWith(newCall);
+
+				//block.Instructions.Add(call);
+				
+			}
+			
 		}
 
 		private bool IsKnownCall(Block block, int pos, ILVariable v)
@@ -88,7 +164,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				return false;
 			if (call.Method.IsStatic)
 				return false;
-			if (!call.Method.DeclaringType.IsKnownType(KnownTypeCode.DefaultInterpolatedStringHandler))
+			if (!call.Method.DeclaringType.IsStringInterpolator())
 				return false;
 			switch (call.Method.Name)
 			{
@@ -104,14 +180,66 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return true;
 		}
 
-		private bool FindToStringAndClear(Block block, int pos, int interpolationStart, int interpolationEnd, ILVariable v, out ILInstruction insertionPoint)
+		private bool FindToStringAndClear(Block block, int pos, int interpolationStart, int interpolationEnd, ILVariable v, out ILInstruction insertionPoint, out int argumentIndex)
 		{
 			insertionPoint = null;
+			argumentIndex = -1;
+
 			if (pos >= block.Instructions.Count)
 				return false;
 			// find
 			// ... call ToStringAndClear(ldloca v) ...
 			// in block.Instructions[pos]
+			for (int i = interpolationStart; i < interpolationEnd; i++)
+			{
+				var result = ILInlining.FindLoadInNext(block.Instructions[pos], v, block.Instructions[i], InliningOptions.None);
+				if (result.Type != ILInlining.FindResultType.Found)
+					return false;
+				insertionPoint ??= result.LoadInst.Parent;
+				Debug.Assert(insertionPoint == result.LoadInst.Parent);
+			}
+
+			if (insertionPoint is not CallInstruction call)
+				return false;
+
+			if (call is { Arguments: { Count: 1 }, Method: { Name: "ToStringAndClear", IsStatic: false } })
+				return true;
+
+			if(call.Arguments is { Count: >= 1 } && call.Method is { Parameters: { Count: >= 1} })
+			{
+				var method = call.Method;
+				insertionPoint = call;
+
+				for (int i = 0; i < method.Parameters.Count; i++)
+				{
+					IParameter p = method.Parameters[i];
+					if (p.Type.IsStringInterpolator())
+					{
+						argumentIndex = i;
+						return true;
+					}
+				}
+			}
+
+			return false;
+			/*
+			return insertionPoint is Call {
+				Arguments: { Count: 1 },
+				Method: { Name: "ToStringAndClear", IsStatic: false }
+			};
+			*/
+		}
+
+		private bool FindArgumentPassing(Block block, int pos, int interpolationStart, int interpolationEnd, ILVariable v, out ILInstruction insertionPoint)
+		{
+			insertionPoint = null;
+			if (pos >= block.Instructions.Count)
+				return false;
+
+			// find 
+			// call SomeMethod(... (ref, in) StringInterpolationArgument ...)
+			// in block.Instructions[pos]
+
 			for (int i = interpolationStart; i < interpolationEnd; i++)
 			{
 				var result = ILInlining.FindLoadInNext(block.Instructions[pos], v, block.Instructions[i], InliningOptions.None);

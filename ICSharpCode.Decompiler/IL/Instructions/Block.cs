@@ -195,7 +195,8 @@ namespace ICSharpCode.Decompiler.IL
 					Debug.Assert(this.SlotInfo == DeconstructInstruction.AssignmentsSlot);
 					break;
 				case BlockKind.InterpolatedString:
-					Debug.Assert(FinalInstruction is Call { Method: { Name: "ToStringAndClear" }, Arguments: { Count: 1 } });
+					//Debug.Assert(FinalInstruction is Call { Method: { Name: "ToStringAndClear" }, Arguments: { Count: 1 } });
+
 					var interpolInit = Instructions[0] as StLoc;
 					DebugAssert(interpolInit != null
 						&& interpolInit.Variable.Kind == VariableKind.InitializerTarget

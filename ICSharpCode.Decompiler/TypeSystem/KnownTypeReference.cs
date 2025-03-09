@@ -153,6 +153,9 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		IAsyncEnumeratorOfT,
 		/// <summary><c>System.Index</c></summary>
 		Index,
+		IL2CPPInterpolatedStringHandler,
+		IDirectWriterInterpolatedStringHandler,
+		IL2CPPCodeWriterUnindentedInterpolatedStringHandler,
 		/// <summary><c>System.Range</c></summary>
 		Range
 	}
@@ -228,6 +231,9 @@ namespace ICSharpCode.Decompiler.TypeSystem
 			new KnownTypeReference(KnownTypeCode.IAsyncEnumerableOfT, TypeKind.Interface, "System.Collections.Generic", "IAsyncEnumerable", 1),
 			new KnownTypeReference(KnownTypeCode.IAsyncEnumeratorOfT, TypeKind.Interface, "System.Collections.Generic", "IAsyncEnumerator", 1),
 			new KnownTypeReference(KnownTypeCode.Index, TypeKind.Struct, "System", "Index", 0),
+			new KnownTypeReference(KnownTypeCode.IL2CPPInterpolatedStringHandler, TypeKind.Struct, "Unity.IL2CPP.CodeWriters", "CodeWriterInterpolatedStringHandler"),
+			new KnownTypeReference(KnownTypeCode.IDirectWriterInterpolatedStringHandler, TypeKind.Struct, "Unity.IL2CPP.CodeWriters", "IDirectWriterInterpolatedStringHandler"),
+			new KnownTypeReference(KnownTypeCode.IL2CPPCodeWriterUnindentedInterpolatedStringHandler, TypeKind.Struct, "Unity.IL2CPP.CodeWriters", "CodeWriterUnindentedInterpolatedStringHandler"),
 			new KnownTypeReference(KnownTypeCode.Range, TypeKind.Struct, "System", "Range", 0),
 		};
 

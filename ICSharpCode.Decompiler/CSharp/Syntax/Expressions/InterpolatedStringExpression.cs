@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 
 using ICSharpCode.Decompiler.CSharp.Syntax.PatternMatching;
+using ICSharpCode.Decompiler.IL;
 
 namespace ICSharpCode.Decompiler.CSharp.Syntax
 {
@@ -10,6 +11,7 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 	{
 		public static readonly TokenRole OpenQuote = new TokenRole("$\"");
 		public static readonly TokenRole CloseQuote = new TokenRole("\"");
+		public CallInstruction FinalWriteInstruction { get; protected set; }
 
 		public AstNodeCollection<InterpolatedStringContent> Content {
 			get { return GetChildrenByRole(InterpolatedStringContent.Role); }
@@ -23,6 +25,11 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 		public InterpolatedStringExpression(IList<InterpolatedStringContent> content)
 		{
 			Content.AddRange(content);
+		}
+
+		public InterpolatedStringExpression(IList<InterpolatedStringContent> content, CallInstruction finalWrite) : this(content)
+		{
+			FinalWriteInstruction = finalWrite;
 		}
 
 		public override void AcceptVisitor(IAstVisitor visitor)
